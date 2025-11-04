@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 
@@ -62,6 +63,8 @@ func run() error {
 	synced = true
 
 	slog.Info("Informer synced, watching for new events")
+
+	healthCheck()
 
 	<-stopCh
 	return nil
@@ -130,4 +133,18 @@ func scaleStatefulSets(clientset *kubernetes.Clientset, namespace, name string, 
 	if err != nil {
 		slog.Error("Failed to scale deployment", "name", name, "error", err)
 	}
+}
+
+func healthCheck() {
+	http.HandleFunc("/health", healthHandler)
+
+	go func() {
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			slog.Error("HTTP server error", "error", err)
+		}
+	}()
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
 }

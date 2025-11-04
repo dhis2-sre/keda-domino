@@ -1,0 +1,55 @@
+x-service: &common-test
+  build:
+    context: .
+    target: build
+  env_file:
+    - .env
+  volumes:
+    - .:/src
+  working_dir: /src
+
+services:
+  prod:
+    image: dhis2/keda-domino:${IMAGE_TAG:-latest}
+    build: .
+    depends_on:
+      init-kubeconfig:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "8080:8080"
+    profiles:
+      - prod
+    volumes:
+      - kubeconfig-volume:/kubeconfig:ro
+    environment:
+      KUBECONFIG: /kubeconfig/config.yaml
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+
+  init-kubeconfig:
+    image: alpine:latest
+    volumes:
+      - /home/tons/.kube:/kubeconfig:ro
+      - kubeconfig-volume:/corrected-kubeconfig
+    command: sh -c "cp /kubeconfig/kubeconfig_instance-cluster-production /corrected-kubeconfig/config.yaml && chmod 600 /corrected-kubeconfig/config.yaml && chown guest /corrected-kubeconfig/config.yaml"
+
+  test:
+    <<: *common-test
+    command: /bin/sh -c 'go test ./...'
+    profiles:
+      - test
+
+  test-coverage:
+    <<: *common-test
+    command: /bin/sh -c 'go test -coverprofile=./coverage.out ./... && go tool cover -html=./coverage.out -o ./coverage.html'
+    profiles:
+      - test-coverage
+
+volumes:
+  kubeconfig-volume:
