@@ -1,0 +1,7 @@
+helm
+.env
+.envrc
+.env.example
+docker-compose.yml
+skaffold.yaml
+.idea
