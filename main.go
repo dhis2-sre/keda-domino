@@ -40,8 +40,13 @@ func main() {
 	listWatch := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "events", metav1.NamespaceAll, fields.Everything())
 	informer := cache.NewSharedInformer(listWatch, &corev1.Event{}, 0)
 
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	synced := false
+
+	_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
+			if !synced {
+				return
+			}
 			event := obj.(*corev1.Event)
 			handleEvent(event, clientset)
 		},
@@ -50,10 +55,23 @@ func main() {
 			handleEvent(event, clientset)
 		},
 	})
+	if err != nil {
+		slog.Error("Failed to add event handler", "error", err)
+		return
+	}
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	go informer.Run(stopCh)
+
+	if !cache.WaitForCacheSync(stopCh, informer.HasSynced) {
+		slog.Error("Failed to sync informer cache")
+		os.Exit(1)
+	}
+	synced = true
+
+	slog.Info("Informer synced, watching for new events")
+
 	<-stopCh
 }
 
