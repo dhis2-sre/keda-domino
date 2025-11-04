@@ -1,0 +1,9 @@
+apiVersion: skaffold/v4beta6
+kind: Config
+deploy:
+  helm:
+    releases:
+      - name: keda-domino
+        namespace: keda
+        createNamespace: true
+        chartPath: helm/chart
