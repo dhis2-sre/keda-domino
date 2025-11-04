@@ -18,23 +18,16 @@ import (
 )
 
 func main() {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		kubeconfig := os.Getenv("KUBECONFIG")
-		if kubeconfig == "" {
-			kubeconfig = os.Getenv("HOME") + "/.kube/config"
-		}
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			slog.Error("Failed to build config", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		slog.Error("Failed to create clientset", "error", err)
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
+	}
+}
+
+func run() error {
+	clientset, err := newClientset()
+	if err != nil {
+		return err
 	}
 
 	listWatch := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "events", metav1.NamespaceAll, fields.Everything())
@@ -56,8 +49,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		slog.Error("Failed to add event handler", "error", err)
-		return
+		return err
 	}
 
 	stopCh := make(chan struct{})
@@ -65,14 +57,35 @@ func main() {
 	go informer.Run(stopCh)
 
 	if !cache.WaitForCacheSync(stopCh, informer.HasSynced) {
-		slog.Error("Failed to sync informer cache")
-		os.Exit(1)
+		return fmt.Errorf("failed to sync informer cache")
 	}
 	synced = true
 
 	slog.Info("Informer synced, watching for new events")
 
 	<-stopCh
+	return nil
+}
+
+func newClientset() (*kubernetes.Clientset, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			return nil, fmt.Errorf("no kubeconfig found! Make sure $KUBECONFIG points to a valid kubeconfig file")
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return clientset, nil
 }
 
 func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset) {
