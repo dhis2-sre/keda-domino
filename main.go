@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -121,8 +122,8 @@ func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset) {
 
 	postgresName := baseName + "-postgresql"
 	scaleStatefulSets(clientset, namespace, postgresName, scaleTo)
-	//minioName := baseName + "-minio"
-	//scaleDeployment(clientset, namespace, minioName, scaleTo)
+	// minioName := baseName + "-minio"
+	// scaleDeployment(clientset, namespace, minioName, scaleTo)
 }
 
 func scaleStatefulSets(clientset *kubernetes.Clientset, namespace, name string, replicas int32) {
@@ -138,8 +139,15 @@ func scaleStatefulSets(clientset *kubernetes.Clientset, namespace, name string, 
 func healthCheck() {
 	http.HandleFunc("/health", healthHandler)
 
+	server := &http.Server{
+		Addr:         ":8080",
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	go func() {
-		if err := http.ListenAndServe(":8080", nil); err != nil {
+		if err := server.ListenAndServe(); err != nil {
 			slog.Error("HTTP server error", "error", err)
 		}
 	}()
