@@ -10,5 +10,8 @@ init-pre-commit:
 	go install github.com/go-critic/go-critic/cmd/gocritic@latest
 	go install golang.org/x/lint/golint@latest
 
-check:
+run-pre-commit:
 	pre-commit run --all-files
+
+dev:
+	docker compose --profile dev up --build --watch

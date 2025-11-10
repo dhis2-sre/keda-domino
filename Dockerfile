@@ -1,4 +1,5 @@
-FROM golang:1.25.3-alpine3.22 AS build
+FROM golang:1.25.4-alpine3.22 AS build
+RUN apk --no-cache -U upgrade && apk add --no-cache aws-cli # Used for development (Docker Compose watch)
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download -x

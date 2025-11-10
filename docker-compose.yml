@@ -39,6 +39,37 @@ services:
       - kubeconfig-volume:/corrected-kubeconfig
     command: sh -c "cp /kubeconfig/kubeconfig_instance-cluster-production /corrected-kubeconfig/config.yaml && chmod 600 /corrected-kubeconfig/config.yaml && chown guest /corrected-kubeconfig/config.yaml"
 
+  dev:
+    build:
+      context: .
+      target: build
+    depends_on:
+      init-kubeconfig:
+        condition: service_completed_successfully
+    environment:
+      KUBECONFIG: /kubeconfig/config.yaml
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+    volumes:
+      - kubeconfig-volume:/kubeconfig:ro
+      - .:/src
+    working_dir: /src
+    command: go run .
+    develop:
+      watch:
+        - action: rebuild
+          path: .
+          ignore:
+            - .git
+            - .idea
+            - README.md
+            - Makefile
+            - .pre-commit-config.yaml
+            - skaffold.yaml
+    profiles:
+      - dev
+
   test:
     <<: *common-test
     command: /bin/sh -c 'go test ./...'
