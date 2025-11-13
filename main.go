@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -38,38 +37,45 @@ func run() error {
 		return err
 	}
 
-	listWatch := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "events", metav1.NamespaceAll, fields.Everything())
-	informer := cache.NewSharedInformer(listWatch, &corev1.Event{}, 0)
-
-	synced := false
-
-	_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			if !synced {
-				return
-			}
-			event := obj.(*corev1.Event)
-			handleEvent(event, clientset, targetNamespaces)
-		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			event := newObj.(*corev1.Event)
-			handleEvent(event, clientset, targetNamespaces)
-		},
-	})
-	if err != nil {
-		return err
-	}
-
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	go informer.Run(stopCh)
 
-	if !cache.WaitForCacheSync(stopCh, informer.HasSynced) {
-		return fmt.Errorf("failed to sync informer cache")
+	synced := false
+	informers := make([]cache.SharedInformer, 0, len(targetNamespaces))
+
+	for _, namespace := range targetNamespaces {
+		listWatch := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "events", namespace, fields.Everything())
+		informer := cache.NewSharedInformer(listWatch, &corev1.Event{}, 0)
+
+		_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				if !synced {
+					return
+				}
+				event := obj.(*corev1.Event)
+				handleEvent(event, clientset)
+			},
+			UpdateFunc: func(oldObj, newObj interface{}) {
+				event := newObj.(*corev1.Event)
+				handleEvent(event, clientset)
+			},
+		})
+		if err != nil {
+			return err
+		}
+
+		informers = append(informers, informer)
+		go informer.Run(stopCh)
+	}
+
+	for i, informer := range informers {
+		if !cache.WaitForCacheSync(stopCh, informer.HasSynced) {
+			return fmt.Errorf("failed to sync informer cache for namespace %s", targetNamespaces[i])
+		}
 	}
 	synced = true
 
-	slog.Info("Informer synced, watching for new events", "targetNamespaces", targetNamespaces)
+	slog.Info("Informers synced, watching for new events", "targetNamespaces", targetNamespaces)
 
 	healthCheck()
 
@@ -98,16 +104,11 @@ func newClientset() (*kubernetes.Clientset, error) {
 	return clientset, nil
 }
 
-func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset, targetNamespaces []string) {
+func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset) {
 	const scaleUp = "KEDAScaleTargetActivated"
 	const scaleDown = "KEDAScaleTargetDeactivated"
 
 	if event.Source.Component != "keda-operator" {
-		return
-	}
-
-	namespace := event.InvolvedObject.Namespace
-	if !slices.Contains(targetNamespaces, namespace) {
 		return
 	}
 
@@ -126,7 +127,8 @@ func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset, targetNam
 
 	baseName := strings.TrimSuffix(name, "-core")
 
-	postgresName := baseName + "-postgresql"
+	namespace := event.InvolvedObject.Namespace
+	postgresName := baseName + "-database-postgresql"
 	scaleStatefulSets(clientset, namespace, postgresName, scaleTo)
 	// minioName := baseName + "-minio"
 	// scaleDeployment(clientset, namespace, minioName, scaleTo)
