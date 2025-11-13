@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,6 +28,11 @@ func main() {
 }
 
 func run() error {
+	targetNamespaces := getEnvAsSlice("TARGET_NAMESPACES")
+	if len(targetNamespaces) == 0 {
+		return fmt.Errorf("TARGET_NAMESPACES env var is required")
+	}
+
 	clientset, err := newClientset()
 	if err != nil {
 		return err
@@ -43,11 +49,11 @@ func run() error {
 				return
 			}
 			event := obj.(*corev1.Event)
-			handleEvent(event, clientset)
+			handleEvent(event, clientset, targetNamespaces)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			event := newObj.(*corev1.Event)
-			handleEvent(event, clientset)
+			handleEvent(event, clientset, targetNamespaces)
 		},
 	})
 	if err != nil {
@@ -63,7 +69,7 @@ func run() error {
 	}
 	synced = true
 
-	slog.Info("Informer synced, watching for new events")
+	slog.Info("Informer synced, watching for new events", "targetNamespaces", targetNamespaces)
 
 	healthCheck()
 
@@ -92,7 +98,7 @@ func newClientset() (*kubernetes.Clientset, error) {
 	return clientset, nil
 }
 
-func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset) {
+func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset, targetNamespaces []string) {
 	const scaleUp = "KEDAScaleTargetActivated"
 	const scaleDown = "KEDAScaleTargetDeactivated"
 
@@ -100,11 +106,12 @@ func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset) {
 		return
 	}
 
-	name := event.InvolvedObject.Name
-	if name != "dhis2-core" {
+	namespace := event.InvolvedObject.Namespace
+	if !slices.Contains(targetNamespaces, namespace) {
 		return
 	}
 
+	name := event.InvolvedObject.Name
 	var scaleTo int32
 	switch event.Reason {
 	case scaleUp:
@@ -118,7 +125,6 @@ func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset) {
 	}
 
 	baseName := strings.TrimSuffix(name, "-core")
-	namespace := event.InvolvedObject.Namespace
 
 	postgresName := baseName + "-postgresql"
 	scaleStatefulSets(clientset, namespace, postgresName, scaleTo)
@@ -155,4 +161,13 @@ func healthCheck() {
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+func getEnvAsSlice(envVar string) []string {
+	value := os.Getenv(envVar)
+	if value == "" {
+		return []string{}
+	}
+
+	return strings.Split(value, ",")
 }

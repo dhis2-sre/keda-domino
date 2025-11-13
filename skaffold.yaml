@@ -1,5 +1,10 @@
 apiVersion: skaffold/v4beta6
 kind: Config
+build:
+  artifacts:
+    - image: dhis2/keda-domino
+  tagPolicy:
+    inputDigest: { }
 deploy:
   helm:
     releases:
@@ -7,3 +12,7 @@ deploy:
         namespace: keda
         createNamespace: true
         chartPath: helm/chart
+        setValueTemplates:
+          targetNamespaces:
+            - whoami
+            - dhis2
