@@ -27,43 +27,55 @@ func main() {
 }
 
 func run() error {
-	clientset, err := newClientset()
-	if err != nil {
-		return err
+	targetNamespaces := getEnvAsSlice("TARGET_NAMESPACES")
+	if len(targetNamespaces) == 0 {
+		return fmt.Errorf("TARGET_NAMESPACES env var is required")
 	}
 
-	listWatch := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "events", metav1.NamespaceAll, fields.Everything())
-	informer := cache.NewSharedInformer(listWatch, &corev1.Event{}, 0)
-
-	synced := false
-
-	_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			if !synced {
-				return
-			}
-			event := obj.(*corev1.Event)
-			handleEvent(event, clientset)
-		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			event := newObj.(*corev1.Event)
-			handleEvent(event, clientset)
-		},
-	})
+	clientset, err := newClientset()
 	if err != nil {
 		return err
 	}
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	go informer.Run(stopCh)
 
-	if !cache.WaitForCacheSync(stopCh, informer.HasSynced) {
-		return fmt.Errorf("failed to sync informer cache")
+	synced := false
+	informers := make([]cache.SharedInformer, 0, len(targetNamespaces))
+
+	for _, namespace := range targetNamespaces {
+		listWatch := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "events", namespace, fields.Everything())
+		informer := cache.NewSharedInformer(listWatch, &corev1.Event{}, 0)
+
+		_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				if !synced {
+					return
+				}
+				event := obj.(*corev1.Event)
+				handleEvent(event, clientset)
+			},
+			UpdateFunc: func(oldObj, newObj interface{}) {
+				event := newObj.(*corev1.Event)
+				handleEvent(event, clientset)
+			},
+		})
+		if err != nil {
+			return err
+		}
+
+		informers = append(informers, informer)
+		go informer.Run(stopCh)
+	}
+
+	for i, informer := range informers {
+		if !cache.WaitForCacheSync(stopCh, informer.HasSynced) {
+			return fmt.Errorf("failed to sync informer cache for namespace %s", targetNamespaces[i])
+		}
 	}
 	synced = true
 
-	slog.Info("Informer synced, watching for new events")
+	slog.Info("Informers synced, watching for new events", "targetNamespaces", targetNamespaces)
 
 	healthCheck()
 
@@ -101,10 +113,6 @@ func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset) {
 	}
 
 	name := event.InvolvedObject.Name
-	if name != "dhis2-core" {
-		return
-	}
-
 	var scaleTo int32
 	switch event.Reason {
 	case scaleUp:
@@ -118,9 +126,9 @@ func handleEvent(event *corev1.Event, clientset *kubernetes.Clientset) {
 	}
 
 	baseName := strings.TrimSuffix(name, "-core")
-	namespace := event.InvolvedObject.Namespace
 
-	postgresName := baseName + "-postgresql"
+	namespace := event.InvolvedObject.Namespace
+	postgresName := baseName + "-database-postgresql"
 	scaleStatefulSets(clientset, namespace, postgresName, scaleTo)
 	// minioName := baseName + "-minio"
 	// scaleDeployment(clientset, namespace, minioName, scaleTo)
@@ -155,4 +163,13 @@ func healthCheck() {
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+func getEnvAsSlice(envVar string) []string {
+	value := os.Getenv(envVar)
+	if value == "" {
+		return []string{}
+	}
+
+	return strings.Split(value, ",")
 }

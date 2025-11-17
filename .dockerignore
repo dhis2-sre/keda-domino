@@ -5,3 +5,6 @@ helm
 docker-compose.yml
 skaffold.yaml
 .idea
+README.md
+Makefile
+.pre-commit-config.yaml
